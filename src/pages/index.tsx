@@ -1,19 +1,19 @@
+/* eslint-disable no-param-reassign */
+/* eslint-disable no-return-assign */
+/* eslint-disable react/no-danger */
 import { GetStaticProps } from 'next';
-import Link from 'next/link';
-
+import Head from 'next/head';
+import { FiCalendar, FiClock, FiUser } from 'react-icons/fi';
 import Prismic from '@prismicio/client';
-import { getPrismicClient } from '../services/prismic';
-
 import { format } from 'date-fns';
-import { ptBR } from 'date-fns/locale'
-
-import Header from '../components/Header';
-import { FiCalendar, FiUser } from 'react-icons/fi';
+import { ptBR } from 'date-fns/locale';
+import Link from 'next/link';
+import { ReactElement, useState } from 'react';
+import { getPrismicClient } from '../services/prismic';
 
 import commonStyles from '../styles/common.module.scss';
 import styles from './home.module.scss';
-import { useState } from 'react';
-import Head from 'next/head';
+import Header from '../components/Header';
 
 interface Post {
   uid?: string;
@@ -22,6 +22,13 @@ interface Post {
     title: string;
     subtitle: string;
     author: string;
+    readTime: number;
+    content: {
+      heading: string;
+      body: {
+        text: string;
+      }[];
+    }[];
   };
 }
 
@@ -32,12 +39,33 @@ interface PostPagination {
 
 interface HomeProps {
   postsPagination: PostPagination;
+  preview: boolean;
 }
 
-export default function Home({ postsPagination }: HomeProps): JSX.Element {
+export default function Home({
+  postsPagination,
+  preview,
+}: HomeProps): ReactElement {
+  function getReadTime(item: Post): number {
+    const totalWords = item.data.content.reduce((total, contentItem) => {
+      total += contentItem.heading.split(' ').length;
+
+      const words = contentItem.body.map(i => i.text.split(' ').length);
+      words.map(word => (total += word));
+      return total;
+    }, 0);
+    return Math.ceil(totalWords / 200);
+  }
+
   const formattedPost = postsPagination.results.map(post => {
+    const readTime = getReadTime(post);
+
     return {
       ...post,
+      data: {
+        ...post.data,
+        readTime,
+      },
       first_publication_date: format(
         new Date(post.first_publication_date),
         'dd MMM yyyy',
@@ -57,14 +85,15 @@ export default function Home({ postsPagination }: HomeProps): JSX.Element {
       return;
     }
 
-    const postResults = await fetch(`${nextPage}`).then(response =>
+    const postsResults = await fetch(`${nextPage}`).then(response =>
       response.json()
     );
+    setNextPage(postsResults.next_page);
+    setCurrentPage(postsResults.page);
 
-    setNextPage(postResults.next_page);
-    setCurrentPage(postResults.page);
+    const newPosts = postsResults.results.map((post: Post) => {
+      const readTime = getReadTime(post);
 
-    const newPosts = postResults.results.map(post => {
       return {
         uid: post.uid,
         first_publication_date: format(
@@ -78,11 +107,12 @@ export default function Home({ postsPagination }: HomeProps): JSX.Element {
           title: post.data.title,
           subtitle: post.data.subtitle,
           author: post.data.author,
+          readTime,
         },
       };
     });
 
-    setPosts([...posts, ...newPosts])
+    setPosts([...posts, ...newPosts]);
   }
 
   return (
@@ -90,6 +120,7 @@ export default function Home({ postsPagination }: HomeProps): JSX.Element {
       <Head>
         <title>Home | spacetraveling</title>
       </Head>
+
       <main className={commonStyles.container}>
         <Header />
 
@@ -108,28 +139,42 @@ export default function Home({ postsPagination }: HomeProps): JSX.Element {
                     <FiUser />
                     {post.data.author}
                   </li>
+                  <li>
+                    <FiClock />
+                    {`${post.data.readTime} min`}
+                  </li>
                 </ul>
               </a>
             </Link>
           ))}
+
           {nextPage && (
             <button type="button" onClick={handleNextPage}>
               Carregar mais posts
             </button>
           )}
         </div>
+
+        {preview && (
+          <aside>
+            <Link href="/api/exit-preview">
+              <a className={commonStyles.preview}>Sair do modo Preview</a>
+            </Link>
+          </aside>
+        )}
       </main>
     </>
-  )
+  );
 }
 
-export const getStaticProps: GetStaticProps = async () => {
+export const getStaticProps: GetStaticProps = async ({ preview = false }) => {
   const prismic = getPrismicClient();
 
   const postsResponse = await prismic.query(
     [Prismic.Predicates.at('document.type', 'posts')],
     {
-      pageSize: 1,
+      pageSize: 3,
+      orderings: '[document.last_publication_date desc]',
     }
   );
 
@@ -141,20 +186,26 @@ export const getStaticProps: GetStaticProps = async () => {
         title: post.data.title,
         subtitle: post.data.subtitle,
         author: post.data.author,
+        content: post.data.content.map(content => {
+          return {
+            heading: content.heading,
+            body: [...content.body],
+          };
+        }),
       },
-    }
+    };
   });
 
   const postsPagination = {
     next_page: postsResponse.next_page,
     results: posts,
-  }
-
-  //console.log(postsPagination.results)
+  };
 
   return {
     props: {
       postsPagination,
-    }
-  }
+      preview,
+    },
+    revalidate: 1800,
+  };
 };
